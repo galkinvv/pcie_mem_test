@@ -2,6 +2,9 @@ use std::cmp;
 use std::env;
 use std::fs::File;
 use std::time::Instant;
+use std::error::Error;
+use std::io::{stdout, Write};
+use std::fs;
 use memmap2;
 
 fn get_rotated_left_7_hex_digits(x: u32, shift_digits: u32) -> u32
@@ -21,11 +24,10 @@ fn index_to_value(i : usize) -> u32
     rotated | (shift << 7*4)
 }
 
-fn test_file(file_to_test: &File) -> bool
+fn test_file(file_to_test: &File) -> Result<bool, Box<dyn Error>>
 {
     let mut mmaped = unsafe { memmap2::MmapMut::map_mut(file_to_test) }.expect("mmap_prepare_failed");
     let len_in_u32 = (file_to_test.metadata().expect("metadata").len() / 4) as usize;
-    println!("u32 units: {}", len_in_u32);
     let m_u32 = unsafe {
         std::slice::from_raw_parts_mut(mmaped.as_mut_ptr() as *mut u32, len_in_u32)
     };
@@ -33,7 +35,7 @@ fn test_file(file_to_test: &File) -> bool
     {
         *value = index_to_value(addr);
     }
-    let max_iteration = 1000;
+    let max_iteration = 3;
     for iteration in 0..max_iteration
     {
         let time_start = Instant::now();
@@ -41,7 +43,7 @@ fn test_file(file_to_test: &File) -> bool
         {
             if *value != index_to_value(addr)
             {
-                let show_range_pre = 32;
+                let show_range_pre = 65;
                 let show_range_post = 1024*1024*4;
                 println!("FAIL: error found at iteration {}", iteration);
                 for ok_addr in (cmp::max(show_range_pre, addr) - show_range_pre)..addr
@@ -63,25 +65,34 @@ fn test_file(file_to_test: &File) -> bool
                         println!("{:#010x}: {:#010x}  OK", from_start_addr, good_value);
                     }
                 }
-                return false;
+                return Ok(false);
             }
         }
         if iteration == 0
         {
             let elapsed = time_start.elapsed();
-            println!("First pass done without miscompares in {} milliseconds", elapsed.as_millis());
-            println!("All {} iterations are expected to be done in {} seconds", max_iteration, (elapsed * max_iteration).as_secs());
+            print!("First pass done without miscompares in {} milliseconds, ", elapsed.as_millis());
+            print!("all {} iterations are expected to be done in {} seconds... ", max_iteration, (elapsed * max_iteration).as_secs());
+            stdout().lock().flush()?;
         }
     }
     println!("PASS: iterations {}", max_iteration);
-    true
+    Ok(true)
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn Error>> {
+    print!("usage: boot with console=null and run as root passing path with a pcie memory bar mapping as a single argument. By https://github.com/galkinvv/pcie_mem_test");
+    println!("Typical example: {} /sys/bus/pci/devices/0000:01:00.0/resource1", env::args_os().next().unwrap_or("./pcie_mem_test".into()).to_string_lossy());
+    if env::args_os().len() != 2
+    {
+        return Err("Expected exactly one command line agument".into());
+    }
     let file_name = env::args_os().nth(1).expect("Single file argument is expected");
-    println!("Testing {:?}", file_name);
-    let file = File::open(file_name).expect("Failed opening file");
-    test_file(&file);
+    print!("Testing {0:?}, size {1}=0x{1:X} ... ", file_name, fs::metadata(&file_name)?.len());
+    stdout().lock().flush()?;
+    let file = File::options().read(true).write(true).open(file_name).expect("Failed opening file for Read+Write");
+    test_file(&file)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -110,16 +121,17 @@ mod tests
     }
 
     #[test]
-    fn test_on_modifying_file()
+    fn test_on_modifying_file() -> Result<(), Box<dyn Error>>
     {
         let modifying = tempfile::tempfile().expect("failed creating temp file");
         let len: usize = 256*1024*1024;
         modifying.set_len(len as u64).expect("set_len");
         let mut mmap_concurrent = unsafe { memmap2::MmapMut::map_mut(&modifying)  }.expect("mmap_concurrent_failed");
         thread::spawn(move || {
-                thread::sleep(time::Duration::from_millis(2000));
+                thread::sleep(time::Duration::from_millis(500));
                 mmap_concurrent[len/2] = 42;
             });
-        assert!(!test_file(&modifying));
+        assert!(!test_file(&modifying)?);
+        Ok(())
     }
 }
