@@ -1,18 +1,9 @@
-use std::fs::File;
-use std::env;
 use std::cmp;
+use std::env;
+use std::fs::File;
+use std::time::Instant;
 use memmap2;
 
-/*
-
-let mut contents = Vec::new();
-file.read_to_end(&mut contents)?;
-
-let mmap = unsafe { Mmap::map(&file)?  };
-
-assert_eq!(&contents[..], &mmap[..]);
-*/
-//use futures::executor::block_on;
 fn get_rotated_left_7_hex_digits(x: u32, shift_digits: u32) -> u32
 {
     let hex_digit_bits = 4;
@@ -42,9 +33,10 @@ fn test_file(file_to_test: &File) -> bool
     {
         *value = index_to_value(addr);
     }
-    let max_iteration = 1000000;
+    let max_iteration = 1000;
     for iteration in 0..max_iteration
     {
+        let time_start = Instant::now();
         for (addr, value) in m_u32.iter().enumerate()
         {
             if *value != index_to_value(addr)
@@ -73,6 +65,12 @@ fn test_file(file_to_test: &File) -> bool
                 }
                 return false;
             }
+        }
+        if iteration == 0
+        {
+            let elapsed = time_start.elapsed();
+            println!("First pass done without miscompares in {} milliseconds", elapsed.as_millis());
+            println!("All {} iterations are expected to be done in {} seconds", max_iteration, (elapsed * max_iteration).as_secs());
         }
     }
     println!("PASS: iterations {}", max_iteration);
