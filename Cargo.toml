@@ -11,3 +11,9 @@ tempfile = "3"
 
 [profile.test]
 opt-level = 3
+
+[profile.release]
+#options to minimize binary size
+panic = 'abort'     # Abort on panic, no stack unwinding
+lto = true          # Enable Link Time Optimization
+strip = true

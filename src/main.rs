@@ -44,7 +44,7 @@ fn test_file(file_to_test: &File) -> Result<bool, Box<dyn Error>>
             if *value != index_to_value(addr)
             {
                 let show_range_pre = 65;
-                let show_range_post = 1024*1024*4;
+                let show_range_post = if cfg!(test) {1} else {1024} * 1024*4;
                 println!("FAIL: error found at iteration {}", iteration);
                 for ok_addr in (cmp::max(show_range_pre, addr) - show_range_pre)..addr
                 {
@@ -81,7 +81,7 @@ fn test_file(file_to_test: &File) -> Result<bool, Box<dyn Error>>
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    print!("usage: boot with console=null and run as root passing path with a pcie memory bar mapping as a single argument. By https://github.com/galkinvv/pcie_mem_test");
+    print!("usage: boot with console=null and run as root passing path with a pcie memory bar mapping as a single argument. By https://github.com/galkinvv/pcie_mem_test  ");
     println!("Typical example: {} /sys/bus/pci/devices/0000:01:00.0/resource1", env::args_os().next().unwrap_or("./pcie_mem_test".into()).to_string_lossy());
     if env::args_os().len() != 2
     {
