@@ -85,7 +85,7 @@ fn test_file(file_to_test: &File) -> Result<bool, Box<dyn Error>>
             if *value != index_to_value(addr)
             {
                 let show_range_pre = 65;
-                let show_range_post = if cfg!(test) {1} else {1024} * 1024*4;
+                let show_range_post = if cfg!(test) {1} else {17} * 1024*4;
                 println!("FAIL: error found at iteration {}", iteration);
                 for ok_addr in (cmp::max(show_range_pre, addr) - show_range_pre)..addr
                 {
