@@ -91,7 +91,8 @@ fn test_file(file_to_test: &File) -> Result<bool, Box<dyn Error>>
                 {
                     println!("{:#010x}: {}  OK", ok_addr * UNIT_ARRAY_BYTES, index_to_value(ok_addr));
                 }
-                println!("{:#010x}: {}\n     MEMBAR {}FAIL", addr * UNIT_ARRAY_BYTES, index_to_value(addr), value);
+                println!("{:#010x}: {}", addr * UNIT_ARRAY_BYTES, index_to_value(addr));
+                println!("     MEMBAR {}FAIL", value);
                 for (bad_addr, bad_value) in mem_as_units_slices[addr + 1 .. cmp::min(addr + show_range_post, len_in_units) ].iter().enumerate()
                 {
                     let from_start_addr = addr + 1 + bad_addr;
@@ -99,7 +100,8 @@ fn test_file(file_to_test: &File) -> Result<bool, Box<dyn Error>>
                     let bad_value_accessed = *bad_value;
                     if good_value != bad_value_accessed
                     {
-                        println!("{:#010x}: {}     MEMBAR {}FAIL", from_start_addr * UNIT_ARRAY_BYTES, good_value, bad_value_accessed);
+                        println!("{:#010x}: {}", from_start_addr * UNIT_ARRAY_BYTES, good_value);
+                        println!("     MEMBAR {}FAIL", bad_value_accessed);
                     }
                     else
                     {
