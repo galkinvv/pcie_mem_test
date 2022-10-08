@@ -41,7 +41,7 @@ usage: boot with console=null and run as root passing path with a pcie memory ba
 Testing "/sys/bus/pci/devices/0000:01:00.0/resource0", size 268435456=0x10000000 ... First pass done without miscompares in 13978 milliseconds, all 3 iterations are expected to be done in 41 seconds... PASS: iterations 3
 [user@host ~]$ 
 </pre>
-In the absence of another gpu - boot with console=null kernel parameter and run test via ssh access.
+In the absence of another gpu - boot with `console=null` kernel parameter and run test via ssh access.
 
 
 NVIDIA memory is typically mapped as BAR1. So, typical usage for NVIDIA
