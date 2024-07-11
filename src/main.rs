@@ -1,5 +1,3 @@
-//cahce reread
-
 use std::cmp;
 use std::env;
 use std::error::Error;
@@ -10,9 +8,23 @@ use std::time::Instant;
 
 type MemSingleUnit = u32;
 const UNIT_COUNT: usize = 8;
+const SHOW_RANGE_PRE: usize = 65;
+const SHOW_RANGE_POST: usize = if cfg!(test) { 1 } else { 17 } * 1024 * 4;
 
 #[derive(PartialEq, Default, Clone, Copy)]
 struct MemUnit([MemSingleUnit; UNIT_COUNT]);
+
+type ReadResultSlice = [MemUnit; SHOW_RANGE_POST];
+
+#[repr(C, align(0x1000))]
+struct Context {
+    check: ReadResultSlice,
+    reread_cache: ReadResultSlice,
+    reread_memory: ReadResultSlice,
+    reread_memory2: ReadResultSlice,
+    iteration: u32,
+    first_error_addr: usize,
+}
 
 const UNIT_ARRAY_BYTES: usize = std::mem::size_of::<MemUnit>();
 
@@ -56,109 +68,205 @@ fn index_to_value(i: usize) -> MemUnit {
     result
 }
 
-fn text_memunit_status(expected: MemUnit, read1: MemUnit, read2: MemUnit) -> &'static str {
-    match (expected == read2, read1 == read2) {
-        (false, false) => "UNSTABLE READ",
-        (true, false) => "SINGLE",
-        (false, true) => "READ SAME",
-        (true, true) => panic!("called status for no error"),
+impl Context {
+    pub const fn new() -> Self {
+        Self {
+            check: [MemUnit([0; UNIT_COUNT]); SHOW_RANGE_POST],
+            reread_cache: [MemUnit([0; UNIT_COUNT]); SHOW_RANGE_POST],
+            reread_memory: [MemUnit([0; UNIT_COUNT]); SHOW_RANGE_POST],
+            reread_memory2: [MemUnit([0; UNIT_COUNT]); SHOW_RANGE_POST],
+            iteration: 0,
+            first_error_addr: 0,
+        }
     }
-}
 
-fn test_file(file_to_test: &File) -> Result<bool, Box<dyn Error>> {
-    let mmaped_ro = unsafe { memmap2::Mmap::map(file_to_test) }.expect("mmap_ro_prepare_failed");
-    let mut mmaped =
-        unsafe { memmap2::MmapMut::map_mut(file_to_test) }.expect("mmap_mut_prepare_failed");
-    let len_in_units = file_to_test.metadata().expect("metadata").len() as usize / UNIT_ARRAY_BYTES;
-    let mem_ro_as_units_slices =
-        unsafe { std::slice::from_raw_parts(mmaped_ro.as_ptr() as *const MemUnit, len_in_units) };
-    let mem_as_units_slices = unsafe {
-        std::slice::from_raw_parts_mut(mmaped.as_mut_ptr() as *mut MemUnit, len_in_units)
-    };
-    for (addr, value) in mem_as_units_slices.iter_mut().enumerate() {
-        *value = index_to_value(addr);
+    fn print_address_expected(&self, addr: usize, note: &str) {
+        let note_pad = if note.is_empty() { "" } else { "  " };
+        println!(
+            "{:#011x}: {}{note_pad}{note}",
+            addr * UNIT_ARRAY_BYTES,
+            index_to_value(addr),
+        );
     }
-    let max_iteration = 3;
-    for iteration in 0..max_iteration {
-        let time_start = Instant::now();
-        for (addr, value) in mem_as_units_slices.iter().enumerate() {
-            let value_accessed = *value;
-            if value_accessed != index_to_value(addr) {
-                let reread = mem_ro_as_units_slices[addr];
-                let show_range_pre = 65;
-                let show_range_post = if cfg!(test) { 1 } else { 17 } * 1024 * 4;
-                println!("FAIL: error found at iteration {}", iteration);
-                for ok_addr in (cmp::max(show_range_pre, addr) - show_range_pre)..addr {
-                    println!(
-                        "{:#010x}: {}  OK",
-                        ok_addr * UNIT_ARRAY_BYTES,
-                        index_to_value(ok_addr)
-                    );
+
+    fn print_cache_reread(&self, addr_offset: usize) {
+        let addr = addr_offset + self.first_error_addr;
+        let check = self.check[addr_offset];
+        let reread_cache = self.reread_cache[addr_offset];
+        let expected = index_to_value(addr);
+        let note = match (expected == reread_cache, check == reread_cache) {
+            (false, false) => "UNSTABLE CACHE",
+            (true, false) => "CACHE ACCESS ERROR",
+            (false, true) => "CACHED ERROR",
+            (true, true) => {
+                return;
+            }
+        };
+        self.print_address_expected(addr, "");
+        println!(" It{}  MEMBAR {check}FAIL", self.iteration);
+        println!(" It{}  CACHED {reread_cache}{note}", self.iteration,);
+    }
+
+    fn print_memory_reread(&self, addr_offset: usize) {
+        let addr = addr_offset + self.first_error_addr;
+        let check = self.check[addr_offset];
+        let reread_cache = self.reread_cache[addr_offset];
+        let reread_memory = self.reread_memory[addr_offset];
+        let reread_memory2 = self.reread_memory2[addr_offset];
+        let expected = index_to_value(addr);
+        // don't compare check VS reread memory and reread_cache VS reread_memory2,
+        // On error-counting scenarious the may be pseudorandoly same
+        let note = match (
+            expected == reread_cache,
+            check == reread_cache,
+            reread_memory == reread_cache,
+        ) {
+            (false, false, false) => {
+                if reread_memory == reread_memory2 {
+                    "TEMPORAL UNSTABLE CACHE"
+                } else {
+                    "PERMANENT UNSTABLE CACHE"
                 }
-                println!(
-                    "{:#010x}: {}",
-                    addr * UNIT_ARRAY_BYTES,
-                    index_to_value(addr)
+            }
+            (false, false, true) => {
+                if reread_memory == reread_memory2 {
+                    "SINGLE UNSTABLE CACHE"
+                } else {
+                    "RANDOM UNSTABLE CACHE"
+                }
+            }
+            (true, false, false) => {
+                if reread_memory == check {
+                    "REPRODUCABLE CACHE ACCESS ERROR"
+                } else {
+                    "RANDOM CACHE ACCESS ERROR"
+                }
+            }
+            (true, false, true) => "SINGLE CACHE ACCESS ERROR",
+            (false, true, true) => "STORED AND CACHED ERROR",
+            (false, true, false) => {
+                if reread_memory == reread_memory2 {
+                    "NON-STORED BUT CACHED ERROR"
+                } else {
+                    "SOMETIMES CACHED ERROR"
+                }
+            }
+            (true, true, false) => {
+                self.print_address_expected(addr, "");
+                println!(" It{}  MEMBAR {check}", self.iteration);
+                println!(" It{}  CACHED {reread_cache}", self.iteration);
+                "NEW FAIL"
+            }
+            (true, true, true) => {
+                self.print_address_expected(addr, "OK");
+                return;
+            }
+        };
+        println!(" It{}  UNCACH {reread_memory}{note}", self.iteration,);
+        println!(" It{}  REREAD {reread_memory2}", self.iteration,);
+    }
+
+    fn test_file(&mut self, file_to_test: &File) -> Result<bool, Box<dyn Error>> {
+        let mmaped_ro =
+            unsafe { memmap2::Mmap::map(file_to_test) }.expect("mmap_ro_prepare_failed");
+        let mut mmaped =
+            unsafe { memmap2::MmapMut::map_mut(file_to_test) }.expect("mmap_mut_prepare_failed");
+        let len_in_units =
+            file_to_test.metadata().expect("metadata").len() as usize / UNIT_ARRAY_BYTES;
+        let mem_ro_as_units_slices = unsafe {
+            std::slice::from_raw_parts(mmaped_ro.as_ptr() as *const MemUnit, len_in_units)
+        };
+        let mem_as_units_slices = unsafe {
+            std::slice::from_raw_parts_mut(mmaped.as_mut_ptr() as *mut MemUnit, len_in_units)
+        };
+        for (addr, value) in mem_as_units_slices.iter_mut().enumerate() {
+            *value = index_to_value(addr);
+        }
+        let max_iteration = 3;
+        let show_range_post = cmp::min(SHOW_RANGE_POST, len_in_units / 2); //limit show_range_post to use other half for cache cleaning effects
+        for iteration in 0..max_iteration {
+            self.iteration = iteration;
+            let time_start = Instant::now();
+            for (first_error_addr, value) in mem_as_units_slices.iter().enumerate() {
+                self.check[0] = *value;
+                if self.check[0] != index_to_value(first_error_addr) {
+                    let checkreader = |storage: &mut Self, addr_offset: usize| {
+                        storage.check[addr_offset] =
+                            mem_as_units_slices[addr_offset + first_error_addr]
+                    };
+                    let rereader = |storage: &mut ReadResultSlice, addr_offset: usize| {
+                        storage[addr_offset] =
+                            mem_ro_as_units_slices[addr_offset + first_error_addr];
+                        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst)
+                    };
+                    rereader(&mut self.reread_cache, 0);
+                    self.first_error_addr = first_error_addr;
+                    println!(
+                        "FAIL: error found at iteration {iteration} address {:#011x}",
+                        self.first_error_addr * UNIT_ARRAY_BYTES
+                    );
+                    for ok_addr in (cmp::max(SHOW_RANGE_PRE, first_error_addr) - SHOW_RANGE_PRE)
+                        ..first_error_addr
+                    {
+                        self.print_address_expected(ok_addr, "OK");
+                    }
+                    self.print_cache_reread(0);
+                    stdout().lock().flush()?;
+                    for bad_addr in
+                        1..cmp::min(show_range_post, len_in_units - self.first_error_addr)
+                    {
+                        checkreader(self, bad_addr);
+                        rereader(&mut self.reread_cache, bad_addr);
+                    }
+
+                    // Make cache clean by reading other half of units
+                    let mut ok_readings = 0;
+                    let reading_estimates_count = len_in_units / 2;
+
+                    for other_addr in 0..reading_estimates_count {
+                        let effective_addr = (other_addr + len_in_units / 2) % len_in_units;
+                        let expected = index_to_value(effective_addr);
+                        let actual = mem_ro_as_units_slices[effective_addr];
+                        if actual == expected {
+                            ok_readings += 1;
+                        }
+                    }
+
+                    rereader(&mut self.reread_memory, 0);
+                    rereader(&mut self.reread_memory2, 0);
+                    self.print_memory_reread(0);
+                    let error_percent = (reading_estimates_count - ok_readings) as f64 * 100.0
+                        / reading_estimates_count as f64;
+                    println!("Error percent estimation: {error_percent:.9}% out of tested");
+                    for bad_addr in
+                        1..cmp::min(show_range_post, len_in_units - self.first_error_addr)
+                    {
+                        rereader(&mut self.reread_memory, bad_addr);
+                        rereader(&mut self.reread_memory2, bad_addr);
+                        self.print_cache_reread(bad_addr);
+                        self.print_memory_reread(bad_addr);
+                    }
+                    return Ok(false);
+                }
+            }
+            if iteration == 0 {
+                let elapsed = time_start.elapsed();
+                print!(
+                    "First pass done without miscompares in {} milliseconds, ",
+                    elapsed.as_millis()
                 );
-                println!("It{}  MEMBAR {}FAIL", iteration, value_accessed);
                 println!(
-                    "It{}  REREAD {}{}",
-                    iteration,
-                    reread,
-                    text_memunit_status(index_to_value(addr), value_accessed, reread)
+                    "all {max_iteration} iterations are expected to be done in {} seconds... ",
+                    (elapsed * max_iteration).as_secs()
                 );
                 stdout().lock().flush()?;
-                for (bad_addr, bad_value) in mem_as_units_slices
-                    [addr + 1..cmp::min(addr + show_range_post, len_in_units)]
-                    .iter()
-                    .enumerate()
-                {
-                    let from_start_addr = addr + 1 + bad_addr;
-                    let good_value = index_to_value(from_start_addr);
-                    let bad_value_accessed = *bad_value;
-                    if good_value != bad_value_accessed {
-                        let bad_reread = mem_ro_as_units_slices[from_start_addr];
-                        println!(
-                            "{:#010x}: {}",
-                            from_start_addr * UNIT_ARRAY_BYTES,
-                            good_value
-                        );
-                        println!("It{}  MEMBAR {}FAIL", iteration, bad_value_accessed);
-                        println!(
-                            "It{}  REREAD {}{}",
-                            iteration,
-                            bad_reread,
-                            text_memunit_status(good_value, bad_value_accessed, bad_reread)
-                        );
-                    } else {
-                        println!(
-                            "{:#010x}: {}  OK",
-                            from_start_addr * UNIT_ARRAY_BYTES,
-                            good_value
-                        );
-                    }
-                }
-                return Ok(false);
             }
         }
-        if iteration == 0 {
-            let elapsed = time_start.elapsed();
-            print!(
-                "First pass done without miscompares in {} milliseconds, ",
-                elapsed.as_millis()
-            );
-            println!(
-                "all {} iterations are expected to be done in {} seconds... ",
-                max_iteration,
-                (elapsed * max_iteration).as_secs()
-            );
-            stdout().lock().flush()?;
-        }
+        println!("PASS: iterations {max_iteration}");
+        Ok(true)
     }
-    println!("PASS: iterations {}", max_iteration);
-    Ok(true)
 }
-
+static mut GLOBAL_MUT_CONTEXT: Context = Context::new();
 fn main() -> Result<(), Box<dyn Error>> {
     print!("usage: boot with console=null and run as root passing path with a pcie memory bar mapping as a single argument. By https://github.com/galkinvv/pcie_mem_test  ");
     println!(
@@ -185,7 +293,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         .write(true)
         .open(file_name)
         .expect("Failed opening file for Read+Write");
-    test_file(&file)?;
+    unsafe {
+        GLOBAL_MUT_CONTEXT.test_file(&file)?;
+    }
     Ok(())
 }
 
@@ -198,22 +308,22 @@ mod tests {
 
     #[test]
     fn test_index_to_value() {
-        assert_eq!(index_to_single_value(0x00000000), 0x10000000);
-        assert_eq!(index_to_single_value(0x00000001), 0x20000100);
-        assert_eq!(index_to_single_value(0x0000000F), 0x20000F00);
-        assert_eq!(index_to_single_value(0x000001F5), 0x5F500001);
-        assert_eq!(index_to_single_value(0x000000F0), 0x300F0000);
-        assert_eq!(index_to_single_value(0x00000100), 0x50000001);
-        assert_eq!(index_to_single_value(0x00000F00), 0x5000000F);
-        assert_eq!(index_to_single_value(0x00001000), 0x20100000);
-        assert_eq!(index_to_single_value(0x00010000), 0x30000001);
-        assert_eq!(index_to_single_value(0x00100000), 0x50001000);
-        assert_eq!(index_to_single_value(0x01000000), 0x20000010);
-        assert_eq!(index_to_single_value(0x0E000006), 0x0E000006);
+        assert_eq!(index_to_single_value(0x00000000), 0x30000000);
+        assert_eq!(index_to_single_value(0x00000001), 0x40010000);
+        assert_eq!(index_to_single_value(0x0000000F), 0x50F00000);
+        assert_eq!(index_to_single_value(0x000001F5), 0xA01F5000);
+        assert_eq!(index_to_single_value(0x000000F0), 0x9000F000);
+        assert_eq!(index_to_single_value(0x00000100), 0xC0000001);
+        assert_eq!(index_to_single_value(0x00000F00), 0x8000F000);
+        assert_eq!(index_to_single_value(0x00001000), 0x40000001);
+        assert_eq!(index_to_single_value(0x00010000), 0x60001000);
+        assert_eq!(index_to_single_value(0x00100000), 0xC0001000);
+        assert_eq!(index_to_single_value(0x01000000), 0x40001000);
+        assert_eq!(index_to_single_value(0x0E000006), 0xA0006E00);
     }
 
     #[test]
-    fn test_on_modifying_file() -> Result<(), Box<dyn Error>> {
+    fn test_on_file() -> Result<(), Box<dyn Error>> {
         let modifying = tempfile::tempfile().expect("failed creating temp file");
         let len: usize = 256 * 1024 * 1024;
         modifying.set_len(len as u64).expect("set_len");
@@ -225,7 +335,9 @@ mod tests {
             ));
             mmap_concurrent[len / 100] = 0x42;
         });
-        assert!(!test_file(&modifying)?);
+        assert!(!unsafe { GLOBAL_MUT_CONTEXT.test_file(&modifying) }?);
+        unsafe { GLOBAL_MUT_CONTEXT = Context::new() }
+        assert!(unsafe { GLOBAL_MUT_CONTEXT.test_file(&modifying) }?);
         Ok(())
     }
 }
