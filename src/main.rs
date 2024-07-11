@@ -1,5 +1,4 @@
 //cahce reread
-//note iter number in prefix
 
 use std::cmp;
 use std::env;
@@ -57,8 +56,7 @@ fn index_to_value(i: usize) -> MemUnit {
     result
 }
 
-fn text_memunit_status(expected: MemUnit, read1: MemUnit, read2: MemUnit) -> &'static str
-{
+fn text_memunit_status(expected: MemUnit, read1: MemUnit, read2: MemUnit) -> &'static str {
     match (expected == read2, read1 == read2) {
         (false, false) => "UNSTABLE READ",
         (true, false) => "SINGLE",
@@ -68,14 +66,12 @@ fn text_memunit_status(expected: MemUnit, read1: MemUnit, read2: MemUnit) -> &'s
 }
 
 fn test_file(file_to_test: &File) -> Result<bool, Box<dyn Error>> {
-    let mmaped_ro =
-        unsafe { memmap2::Mmap::map(file_to_test) }.expect("mmap_ro_prepare_failed");
+    let mmaped_ro = unsafe { memmap2::Mmap::map(file_to_test) }.expect("mmap_ro_prepare_failed");
     let mut mmaped =
         unsafe { memmap2::MmapMut::map_mut(file_to_test) }.expect("mmap_mut_prepare_failed");
     let len_in_units = file_to_test.metadata().expect("metadata").len() as usize / UNIT_ARRAY_BYTES;
-    let mem_ro_as_units_slices = unsafe {
-        std::slice::from_raw_parts(mmaped_ro.as_ptr() as *const MemUnit, len_in_units)
-    };
+    let mem_ro_as_units_slices =
+        unsafe { std::slice::from_raw_parts(mmaped_ro.as_ptr() as *const MemUnit, len_in_units) };
     let mem_as_units_slices = unsafe {
         std::slice::from_raw_parts_mut(mmaped.as_mut_ptr() as *mut MemUnit, len_in_units)
     };
@@ -88,6 +84,7 @@ fn test_file(file_to_test: &File) -> Result<bool, Box<dyn Error>> {
         for (addr, value) in mem_as_units_slices.iter().enumerate() {
             let value_accessed = *value;
             if value_accessed != index_to_value(addr) {
+                let reread = mem_ro_as_units_slices[addr];
                 let show_range_pre = 65;
                 let show_range_post = if cfg!(test) { 1 } else { 17 } * 1024 * 4;
                 println!("FAIL: error found at iteration {}", iteration);
@@ -103,9 +100,14 @@ fn test_file(file_to_test: &File) -> Result<bool, Box<dyn Error>> {
                     addr * UNIT_ARRAY_BYTES,
                     index_to_value(addr)
                 );
-                println!("     MEMBAR {}FAIL", value_accessed);
-                let reread = mem_ro_as_units_slices[addr];
-                println!("     REREAD {}{}", reread, text_memunit_status(index_to_value(addr), value_accessed, reread));
+                println!("It{}  MEMBAR {}FAIL", iteration, value_accessed);
+                println!(
+                    "It{}  REREAD {}{}",
+                    iteration,
+                    reread,
+                    text_memunit_status(index_to_value(addr), value_accessed, reread)
+                );
+                stdout().lock().flush()?;
                 for (bad_addr, bad_value) in mem_as_units_slices
                     [addr + 1..cmp::min(addr + show_range_post, len_in_units)]
                     .iter()
@@ -115,14 +117,19 @@ fn test_file(file_to_test: &File) -> Result<bool, Box<dyn Error>> {
                     let good_value = index_to_value(from_start_addr);
                     let bad_value_accessed = *bad_value;
                     if good_value != bad_value_accessed {
+                        let bad_reread = mem_ro_as_units_slices[from_start_addr];
                         println!(
                             "{:#010x}: {}",
                             from_start_addr * UNIT_ARRAY_BYTES,
                             good_value
                         );
-                        println!("     MEMBAR {}FAIL", bad_value_accessed);
-                        let bad_reread = mem_ro_as_units_slices[from_start_addr];
-                        println!("     REREAD {}{}", bad_reread, text_memunit_status(good_value, bad_value_accessed, bad_reread));
+                        println!("It{}  MEMBAR {}FAIL", iteration, bad_value_accessed);
+                        println!(
+                            "It{}  REREAD {}{}",
+                            iteration,
+                            bad_reread,
+                            text_memunit_status(good_value, bad_value_accessed, bad_reread)
+                        );
                     } else {
                         println!(
                             "{:#010x}: {}  OK",
