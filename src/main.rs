@@ -24,6 +24,8 @@ struct Context {
     reread_memory2: ReadResultSlice,
     iteration: u32,
     first_error_addr: usize,
+    detailed_fails: usize,
+    detailed_oks: usize,
 }
 
 const UNIT_ARRAY_BYTES: usize = std::mem::size_of::<MemUnit>();
@@ -77,6 +79,8 @@ impl Context {
             reread_memory2: [MemUnit([0; UNIT_COUNT]); SHOW_RANGE_POST],
             iteration: 0,
             first_error_addr: 0,
+            detailed_fails: 0,
+            detailed_oks: 0,
         }
     }
 
@@ -107,7 +111,7 @@ impl Context {
         println!(" It{}  CACHED {reread_cache}{note}", self.iteration,);
     }
 
-    fn print_memory_reread(&self, addr_offset: usize) {
+    fn print_memory_reread(&mut self, addr_offset: usize) {
         let addr = addr_offset + self.first_error_addr;
         let check = self.check[addr_offset];
         let reread_cache = self.reread_cache[addr_offset];
@@ -159,11 +163,13 @@ impl Context {
             }
             (true, true, true) => {
                 self.print_address_expected(addr, "OK");
+                self.detailed_oks += 1;
                 return;
             }
         };
-        println!(" It{}  UNCACH {reread_memory}{note}", self.iteration,);
-        println!(" It{}  REREAD {reread_memory2}", self.iteration,);
+        println!(" It{}  UNCACH {reread_memory}{note}", self.iteration);
+        println!(" It{}  REREAD {reread_memory2}", self.iteration);
+        self.detailed_fails += 1;
     }
 
     fn test_file(&mut self, file_to_test: &File) -> Result<bool, Box<dyn Error>> {
@@ -224,7 +230,7 @@ impl Context {
                     let reading_estimates_count = len_in_units / 2;
 
                     for other_addr in 0..reading_estimates_count {
-                        let effective_addr = (other_addr + len_in_units / 2) % len_in_units;
+                        let effective_addr = (other_addr + first_error_addr + len_in_units / 3) % len_in_units;
                         let expected = index_to_value(effective_addr);
                         let actual = mem_ro_as_units_slices[effective_addr];
                         if actual == expected {
@@ -235,9 +241,6 @@ impl Context {
                     rereader(&mut self.reread_memory, 0);
                     rereader(&mut self.reread_memory2, 0);
                     self.print_memory_reread(0);
-                    let error_percent = (reading_estimates_count - ok_readings) as f64 * 100.0
-                        / reading_estimates_count as f64;
-                    println!("Error percent estimation: {error_percent:.9}% out of tested");
                     for bad_addr in
                         1..cmp::min(show_range_post, len_in_units - self.first_error_addr)
                     {
@@ -246,6 +249,14 @@ impl Context {
                         self.print_cache_reread(bad_addr);
                         self.print_memory_reread(bad_addr);
                     }
+                    ok_readings += self.detailed_oks;
+                    let total_readings =
+                        reading_estimates_count + self.detailed_oks + self.detailed_fails;
+                    let error_part =
+                        total_readings as f64 / ((total_readings - ok_readings) as f64);
+                    let error_percent = 100. / error_part;
+                    println!("Iteration {iteration}: error percent estimation after first error at {:#011x}:", self.first_error_addr * UNIT_ARRAY_BYTES);
+                    println!("{error_percent:.9}% out of tested, it's ~1/{error_part:.2} (estimated from {total_readings} verified blocks)");
                     return Ok(false);
                 }
             }
@@ -304,7 +315,6 @@ mod tests {
     use super::*;
     use std::thread;
     use std::time;
-    use tempfile;
 
     #[test]
     fn test_index_to_value() {

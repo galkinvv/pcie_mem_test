@@ -2,7 +2,7 @@
 #The command above rebuilds minmized binary without backtrace spport to commit verified build into the repo
 [package]
 name = "pcie_mem_test"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 
 [dependencies]
