@@ -1,9 +1,9 @@
+#!/usr/bin/env -S RUSTC_BOOTSTRAP=1 RUSTFLAGS=-Crelocation-model=static cargo build --release --target x86_64-unknown-linux-gnu -Z build-std=std,panic_abort -Z build-std-features -Z trim-paths --manifest-path
+#The command above rebuilds minmized binary without backtrace spport to commit verified build into the repo
 [package]
 name = "pcie_mem_test"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 memmap2 = "0.9"
@@ -13,7 +13,10 @@ tempfile = "3"
 opt-level = 3
 
 [profile.release]
-#options to minimize binary size
-panic = 'abort'     # Abort on panic, no stack unwinding
-lto = true          # Enable Link Time Optimization
+#options to minimize binary size while keeping full optimizations
+opt-level = 3
+overflow-checks = false
+lto = true
+panic = "abort"
+codegen-units = 1   # Reduce number of codegen units to increase optimizations.
 strip = true

@@ -1,3 +1,6 @@
+//cahce reread
+//note iter number in prefix
+
 use std::cmp;
 use std::env;
 use std::error::Error;
@@ -39,8 +42,8 @@ fn get_rotated_left_7_hex_digits(x: u32, shift_digits: u32) -> u32 {
 }
 
 fn index_to_single_value(phys_addr: usize) -> MemSingleUnit {
-    let shift: u32 = ((1 + phys_addr) as u32) % 7;
-    let rotated = get_rotated_left_7_hex_digits(phys_addr as u32, shift);
+    let shift: u32 = ((1 + phys_addr) as u32) % 14;
+    let rotated = get_rotated_left_7_hex_digits(phys_addr as u32, shift % 7);
     //add shift value as first hex deigit
     (rotated | (shift << (7 * 4))) as MemSingleUnit
 }
@@ -137,7 +140,7 @@ fn test_file(file_to_test: &File) -> Result<bool, Box<dyn Error>> {
                 "First pass done without miscompares in {} milliseconds, ",
                 elapsed.as_millis()
             );
-            print!(
+            println!(
                 "all {} iterations are expected to be done in {} seconds... ",
                 max_iteration,
                 (elapsed * max_iteration).as_secs()
@@ -164,7 +167,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let file_name = env::args_os()
         .nth(1)
         .expect("Single file argument is expected");
-    print!(
+    println!(
         "Testing {0:?}, size {1}=0x{1:X} ... ",
         file_name,
         fs::metadata(&file_name)?.len()
