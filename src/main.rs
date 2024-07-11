@@ -323,7 +323,7 @@ mod tests {
     }
 
     #[test]
-    fn test_on_file() -> Result<(), Box<dyn Error>> {
+    fn test_on_modifying_file() -> Result<(), Box<dyn Error>> {
         let modifying = tempfile::tempfile().expect("failed creating temp file");
         let len: usize = 256 * 1024 * 1024;
         modifying.set_len(len as u64).expect("set_len");
@@ -336,8 +336,15 @@ mod tests {
             mmap_concurrent[len / 100] = 0x42;
         });
         assert!(!unsafe { GLOBAL_MUT_CONTEXT.test_file(&modifying) }?);
-        unsafe { GLOBAL_MUT_CONTEXT = Context::new() }
-        assert!(unsafe { GLOBAL_MUT_CONTEXT.test_file(&modifying) }?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_on_static_file() -> Result<(), Box<dyn Error>> {
+        let static_file = tempfile::tempfile().expect("failed creating temp file");
+        let len: usize = 256 * 1024 * 1024;
+        static_file.set_len(len as u64).expect("set_len");
+        assert!(Context::new().test_file(&static_file)?);
         Ok(())
     }
 }
