@@ -41,7 +41,7 @@ fn get_rotated_left_7_hex_digits(x: u32, shift_digits: u32) -> u32 {
 }
 
 fn index_to_single_value(phys_addr: usize) -> MemSingleUnit {
-    let shift: u32 = ((1 + phys_addr) as u32) % 14;
+    let shift: u32 = ((1 + phys_addr) as u32) % 13 + 2;
     let rotated = get_rotated_left_7_hex_digits(phys_addr as u32, shift % 7);
     //add shift value as first hex deigit
     (rotated | (shift << (7 * 4))) as MemSingleUnit
