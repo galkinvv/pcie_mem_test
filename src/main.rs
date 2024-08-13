@@ -26,9 +26,12 @@ struct Context {
     first_error_addr: usize,
     detailed_fails: usize,
     detailed_oks: usize,
+    len_in_bytes: usize,
 }
 
 const UNIT_ARRAY_BYTES: usize = std::mem::size_of::<MemUnit>();
+const HEX_DIGIT_BITS: u32 = 4;
+const KEEP_HEX_DIGITS: u32 = 7;
 
 impl std::fmt::Display for MemUnit {
     fn fmt(self: &MemUnit, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -46,19 +49,18 @@ impl std::fmt::Display for MemUnit {
 }
 
 fn get_rotated_left_7_hex_digits(x: u32, shift_digits: u32) -> u32 {
-    let hex_digit_bits = 4;
-    let shift_bits = shift_digits * hex_digit_bits;
-    let upper_digits_mask = 0xFFFFFFFFu32 << (32 - shift_bits - hex_digit_bits); //mask for shift_digits digits
+    let shift_bits = shift_digits * HEX_DIGIT_BITS;
+    let upper_digits_mask = 0xFFFFFFFFu32 << (32 - shift_bits - HEX_DIGIT_BITS); //mask for shift_digits digits
     let x_with_bits_pre_shift =
-        ((x & upper_digits_mask) << hex_digit_bits) | (x & !upper_digits_mask);
+        ((x & upper_digits_mask) << HEX_DIGIT_BITS) | (x & !upper_digits_mask);
     x_with_bits_pre_shift.rotate_left(shift_bits)
 }
 
 fn index_to_single_value(phys_addr: usize) -> MemSingleUnit {
     let shift: u32 = ((1 + phys_addr) as u32) % 13 + 2;
-    let rotated = get_rotated_left_7_hex_digits(phys_addr as u32, shift % 7);
+    let rotated = get_rotated_left_7_hex_digits(phys_addr as u32, shift % KEEP_HEX_DIGITS);
     //add shift value as first hex deigit
-    (rotated | (shift << (7 * 4))) as MemSingleUnit
+    (rotated | (shift << (KEEP_HEX_DIGITS * HEX_DIGIT_BITS))) as MemSingleUnit
 }
 
 fn index_to_value(i: usize) -> MemUnit {
@@ -81,6 +83,7 @@ impl Context {
             first_error_addr: 0,
             detailed_fails: 0,
             detailed_oks: 0,
+            len_in_bytes: 0,
         }
     }
 
@@ -91,6 +94,36 @@ impl Context {
             addr * UNIT_ARRAY_BYTES,
             index_to_value(addr),
         );
+    }
+
+    fn value_to_index(&self, u: MemUnit) -> Option<usize> {
+        if self.len_in_bytes <= 1 << (KEEP_HEX_DIGITS * HEX_DIGIT_BITS) {
+            //operate only if transformation is reversible
+            let converted_addr = u.0[0];
+            let shift_done = converted_addr >> (KEEP_HEX_DIGITS * HEX_DIGIT_BITS);
+            let shift_reversed = ((3 * KEEP_HEX_DIGITS) - shift_done) % KEEP_HEX_DIGITS;
+            let candidate = get_rotated_left_7_hex_digits(converted_addr, shift_reversed) as usize
+                / UNIT_ARRAY_BYTES;
+            if index_to_value(candidate as usize) == u {
+                return Some(candidate);
+            }
+        }
+        None
+    }
+    fn print_error_unit(&self, expected: MemUnit, u: MemUnit, stage: &[u8; 6], note: &str) {
+        let stage6 = core::str::from_utf8(stage).unwrap();
+        let is_expected = u == expected;
+        match (self.value_to_index(u), is_expected) {
+            (Some(inaddr), false) => {
+                let byte_addr = inaddr * UNIT_ARRAY_BYTES;
+                println!(" i{} {byte_addr:07x}  {u}{note}", self.iteration);
+            }
+            (_, true) => {
+                let stage_as_ok = stage6.to_lowercase();
+                println!(" i{}   {stage_as_ok} {u}{note}", self.iteration);
+            }
+            _ => println!(" i{}   {stage6} {u}{note}", self.iteration),
+        }
     }
 
     fn print_cache_reread(&self, addr_offset: usize) {
@@ -107,8 +140,8 @@ impl Context {
             }
         };
         self.print_address_expected(addr, "");
-        println!(" It{}  MEMBAR {check}FAIL", self.iteration);
-        println!(" It{}  CACHED {reread_cache}{note}", self.iteration,);
+        self.print_error_unit(expected, check, b"MEMBAR", "FAIL");
+        self.print_error_unit(expected, reread_cache, b"CACHED", note);
     }
 
     fn print_memory_reread(&mut self, addr_offset: usize) {
@@ -157,8 +190,8 @@ impl Context {
             }
             (true, true, false) => {
                 self.print_address_expected(addr, "");
-                println!(" It{}  MEMBAR {check}", self.iteration);
-                println!(" It{}  CACHED {reread_cache}", self.iteration);
+                println!(" i{}   membar {check}   OK", self.iteration);
+                println!(" i{}   cached {reread_cache}   OK", self.iteration);
                 "NEW FAIL"
             }
             (true, true, true) => {
@@ -167,8 +200,8 @@ impl Context {
                 return;
             }
         };
-        println!(" It{}  UNCACH {reread_memory}{note}", self.iteration);
-        println!(" It{}  REREAD {reread_memory2}", self.iteration);
+        self.print_error_unit(expected, reread_memory, b"UNCACH", note);
+        self.print_error_unit(expected, reread_memory2, b"REREAD", "");
         self.detailed_fails += 1;
     }
 
@@ -177,8 +210,8 @@ impl Context {
             unsafe { memmap2::Mmap::map(file_to_test) }.expect("mmap_ro_prepare_failed");
         let mut mmaped =
             unsafe { memmap2::MmapMut::map_mut(file_to_test) }.expect("mmap_mut_prepare_failed");
-        let len_in_units =
-            file_to_test.metadata().expect("metadata").len() as usize / UNIT_ARRAY_BYTES;
+        self.len_in_bytes = file_to_test.metadata().expect("metadata").len() as usize;
+        let len_in_units = self.len_in_bytes / UNIT_ARRAY_BYTES;
         let mem_ro_as_units_slices = unsafe {
             std::slice::from_raw_parts(mmaped_ro.as_ptr() as *const MemUnit, len_in_units)
         };
@@ -188,6 +221,7 @@ impl Context {
         for (addr, value) in mem_as_units_slices.iter_mut().enumerate() {
             *value = index_to_value(addr);
         }
+        println!("Fill done, verification started...");
         let max_iteration = 3;
         let show_range_post = cmp::min(SHOW_RANGE_POST, len_in_units / 2); //limit show_range_post to use other half for cache cleaning effects
         for iteration in 0..max_iteration {
@@ -230,7 +264,8 @@ impl Context {
                     let reading_estimates_count = len_in_units / 2;
 
                     for other_addr in 0..reading_estimates_count {
-                        let effective_addr = (other_addr + first_error_addr + len_in_units / 3) % len_in_units;
+                        let effective_addr =
+                            (other_addr + first_error_addr + len_in_units / 3) % len_in_units;
                         let expected = index_to_value(effective_addr);
                         let actual = mem_ro_as_units_slices[effective_addr];
                         if actual == expected {
