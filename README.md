@@ -3,7 +3,7 @@ linux debug tool for directly writing to PCIe bar memory (actually any memory ar
 
 Use with caution! If you accidently pass storage device memory BAR as an argument - data will be destroyed.
 
-The main use case is testing NVIDIA & AMD gpus memory with driver unloaded. The gpu instabce is selected by specifying PCIe device like `0000:01:00.0`
+The main use case is testing NVIDIA & AMD gpus memory with driver unloaded. The gpu instance is selected by specifying PCIe device like `0000:01:00.0`
 
 For AMD GCN GPUs memory is typically mapped as BAR0. Example with amd GPU with display connected to integrated intel, so driver unloading is possible and nothing touch the external gpu memory:
 <pre>
