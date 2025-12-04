@@ -59,3 +59,27 @@ If any errors are detected - the output contains lines like this showing the add
 
 There is a known bug - if the memory erros are not stable - sometimes failed line in identical to expected, since the second reread gives desired value,
 adding something like volatile/atomic access may be useful.
+
+## Example outputs
+
+<details><summary>
+PCIe slot connectivity lost during test 
+</summary>
+<pre>
+0x00a1e71e0: 5e0a1e71 9e71e4a1 d8a1e71e 41eca1e7   81e71f0a cf4a1e71 371f8a1e 7a1e71fc   OK
+0x00a1e7200: b200a1e7 2e7204a1 68a1e720 a720ca1e   ea1e7210 514a1e72 9e7218a1 dca1e721   OK
+0x00a1e7220: 4220a1e7 81e7224a c28a1e72 3722ca1e   7a1e7230 b234a1e7 2e7238a1 6ca1e723 
+ i1   MEMBAR 4220a1e7 81e7224a c28a1e72 3722ca1e   ffffffff ffffffff ffffffff ffffffff FAIL
+ i1   CACHED ffffffff ffffffff ffffffff ffffffff   ffffffff ffffffff ffffffff ffffffff UNSTABLE CACHE
+ i1   UNCACH ffffffff ffffffff ffffffff ffffffff   ffffffff ffffffff ffffffff ffffffff SINGLE UNSTABLE CACHE
+ i1   REREAD ffffffff ffffffff ffffffff ffffffff   ffffffff ffffffff ffffffff ffffffff 
+0x00a1e7240: a7240a1e ea1e7244 548a1e72 9e724ca1   d0a1e725 4254a1e7 81e7258a c5ca1e72 
+ i1   MEMBAR ffffffff ffffffff ffffffff ffffffff   ffffffff ffffffff ffffffff ffffffff FAIL
+ i1   CACHED ffffffff ffffffff ffffffff ffffffff   ffffffff ffffffff ffffffff ffffffff CACHED ERROR
+ i1   UNCACH ffffffff ffffffff ffffffff ffffffff   ffffffff ffffffff ffffffff ffffffff STORED AND CACHED ERROR
+ i1   REREAD ffffffff ffffffff ffffffff ffffffff   ffffffff ffffffff ffffffff ffffffff 
+...
+Iteration 1: error percent estimation after first error at 0x00a1e7220:
+100.000000000% out of tested, it's ~1/1.00 (estimated from 4263936 verified blocks)
+</pre>   
+</details>
